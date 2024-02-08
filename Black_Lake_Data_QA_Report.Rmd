@@ -1,0 +1,496 @@
+---
+title: "Black Lake Analysis"
+author: "Alyssa Peter"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+This report includes data validation, quality assessment, and preliminary analysis for Thurston County's Water Quality Program Black Lake Pollution Identification and Correction Project. Code is included for transparency and reproducibility.
+
+If the decision to accept or reject a value is unclear, the option most protective of public health will be chosen. 
+
+```{r,warning=FALSE,message=FALSE}
+library(ggplot2)
+library(dplyr)
+library(tidyverse)
+library(lubridate)
+
+#Plotly
+devtools::install_github("ropensci/plotly")
+library(plotly)
+```
+
+
+Load Dataframe
+
+```{r,warning=FALSE,message=FALSE}
+library(RCurl)
+```
+
+
+```{r, results="hide"}
+df <- read.csv("https://raw.githubusercontent.com/AlyssaPeter/R-Code-Sample/main/EIM_Black_Lake_PIC_Project_Data.csv", stringsAsFactors = TRUE, fileEncoding = "ISO-8859-1")
+df
+```
+
+
+## Data Validation and QA Assessment
+
+Check the dataframe for null values.
+
+```{r}
+null_values <- sapply(df, function(x) sum(is.na(x)))
+null_values
+```
+
+Check if Latitude and Longitude are the same per each Study_Specific_Location_ID. If the return is "TRUE", then results are okay.
+
+```{r}
+location_coords_consistency <- df %>%
+  group_by(Study_Specific_Location_ID) %>%
+  summarise(
+    consistent_latitude = n_distinct(Latitude_Decimal_Degrees) == 1,
+    consistent_longitude = n_distinct(Longitude_Decimal_Degrees) == 1
+  )
+location_coords_consistency
+```
+
+Calculate the number of QA samples taken. The result should be 0.10 or greater (at least 10% of the total).
+
+```{r}
+replicate_flag_counts <- df %>%
+  summarise(
+    total_count = n(),
+    replicate_count = sum(Sample_Replicate_Flag == "Y"),
+    replicate_proportion = replicate_count / total_count
+  )
+replicate_flag_counts
+```
+
+Provide recommendation to the team to increase QA sample frequency.
+
+Check that sample values are within expected range. If no records are returned, no values are out of expected range. Any values that are returned, please review and accept/reject accordingly.
+
+```{r}
+##Check expected values
+#E.coli is expected to be between 1 and 2419.6
+#TP is expected to be between 0.005 and 1000
+# Filter records for Total Phosphorus and E. coli that don't meet the criteria
+invalid_records <- df %>%
+  filter(
+    (Result_Parameter_Name == "Total Phosphorus" & (Result_Value < 0.005 | Result_Value > 1000)) |
+      (Result_Parameter_Name == "E. coli" & (Result_Value < 1 | Result_Value > 2420))
+  )
+
+# Display the records that fall out of bounds
+invalid_records
+```
+
+
+
+**Relative Percent Difference**
+
+Check the Relative Percent Difference (RPD) for E. coli and phosphorus samples.Samples outside defined thresholds may be rejected.
+
+$$
+RPD = \frac{\lvert{R1-R2}\rvert}{\frac{R1+R2}{2}}\times100
+$$
+***Total Phosphorus:***
+TP QA sample values must be within 20% of the sample. 
+OR if TP<0.025, sample is accepted even if they fall outside the 20% range.
+
+```{r}
+# Filter dataframe by result_parameter_name = 'Total Phosphorus'
+total_phosphorus_data <- df %>%
+  filter(Result_Parameter_Name == "Total Phosphorus")
+
+# Filter for Sample_Replicate_Flag == "Y"
+replicate_Y_data <- total_phosphorus_data %>%
+  filter(Sample_Replicate_Flag == "Y")
+
+# Pair rows for Sample_Replicate_Flag == "Y" with Sample_Replicate_Flag == "N"
+paired_data <- replicate_Y_data %>%
+  left_join(total_phosphorus_data %>%
+              filter(Sample_Replicate_Flag == "N"),
+            by = c("Study_Specific_Location_ID", "Field_Collection_Start_Date"),
+            suffix = c("_Y", "_N"))
+
+# Calculate the relative percent difference between the two paired values
+paired_data <- paired_data %>%
+  mutate(relative_percent_difference = abs(Result_Value_Y - Result_Value_N) / ((Result_Value_Y + Result_Value_N) / 2) * 100)
+
+# Return a table showing both paired values, Study_Specific_Location_ID, Field_Collection_Start_Date, Result_Value, and calculated relative percent difference values
+TP_result_table <- paired_data %>%
+  select(Study_Specific_Location_ID, Field_Collection_Start_Date, Result_Value_Y, Result_Value_N, relative_percent_difference)
+
+# Print the table
+print(TP_result_table)
+
+# Assign a group to each row based on the average of the paired Result_Value
+TP_result_table <- TP_result_table %>%
+  mutate(
+    group = ifelse((Result_Value_Y + Result_Value_N) / 2 < 0.025, "accepted", "evaluate"),
+    highlight = ifelse(relative_percent_difference > 20, "highlight", "")
+  )
+
+# Print the table with group and highlight columns
+print(TP_result_table)
+#Values highlighted in table are REJ
+```
+
+RPD for samples needs to be evaluated in context. Results returned in the table as "accepted" will be accepted regardless of RPD because the sample concentrations are close to the detection limit. 
+
+Those labeled "evaluate" should be assessed based on both the RPD value and what is known about the site heterogeneity. 
+
+BLA005, collected on 7/25/2023, does not meet quality standards and will be removed from the analysis. 
+
+
+***E. coli:***
+Bacteria samples with low counts tend to have higher variability. Therefore, EC sample pairs (sample and field duplicate) will be separated into two groups:
+
+• “low count samples” where the pair mean ≤ 20 MPN/100 mL and 
+• “higher count samples” where the pair mean > 20 MPN/100 mL.
+
+For precision of bacteria field replicates:
+• 50% of the replicate pairs must be at or below 20% RPD 
+• 90% of the pairs must be at or below 50% RPD
+
+```{r}
+# Filter for E. coli
+ecoli_data <- subset(df, Result_Parameter_Name == 'E.coli')
+
+# Filter for Sample_Replicate_Flag == "Y"
+replicate_Y_data <- ecoli_data %>%
+  filter(Sample_Replicate_Flag == "Y")
+
+# Pair rows for Sample_Replicate_Flag == "Y" with Sample_Replicate_Flag == "N"
+paired_df <- replicate_Y_data %>%
+  left_join(ecoli_data %>%
+              filter(Sample_Replicate_Flag == "N"),
+            by = c("Study_Specific_Location_ID", "Field_Collection_Start_Date"),
+            suffix = c("_Y", "_N"))
+
+# Calculate the relative percent difference between the two paired values
+paired_df <- paired_df %>%
+  mutate(relative_percent_difference = abs(Result_Value_Y - Result_Value_N) / ((Result_Value_Y + Result_Value_N) / 2) * 100)
+
+EC_result_table <- paired_df %>%
+  select(Study_Specific_Location_ID, Field_Collection_Start_Date, Result_Value_Y, Result_Value_N, relative_percent_difference)
+
+# Return the table
+EC_result_table
+
+# Assign a group based on the average of the Result_Value_Replicate_Y and Result_Value_Replicate_N
+EC_result_table$group <- ifelse((EC_result_table$Result_Value_Y + EC_result_table$Result_Value_N) / 2 <= 20,
+                             "low count samples", "higher count samples")
+
+# Calculate the percent of values with Relative_Percent_Difference less than or equal to 20 by group
+percent_diff_20 <- with(EC_result_table, tapply(relative_percent_difference <= 20, group, mean) * 100)
+
+# Calculate the percent of values with Relative_Percent_Difference less than or equal to 50 by group
+percent_diff_50 <- with(EC_result_table, tapply(relative_percent_difference <= 50, group, mean) * 100)
+
+# Combine the results into a data frame
+percent_diff_results <- data.frame(
+  Group = c("low count samples", "higher count samples"),
+  Percent_Diff_LE_20 = c(percent_diff_20["low count samples"], percent_diff_20["higher count samples"]),
+  Percent_Diff_LE_50 = c(percent_diff_50["low count samples"], percent_diff_50["higher count samples"])
+)
+
+# Return the results
+percent_diff_results
+# • 50% of the replicate pairs must be at or below 20% RPD 
+# • 90% of the pairs must be at or below 50% RPD
+```
+
+The replicate sample for BLA009 on 10/12/2023 stands out as an anomaly with an RPD of 129%. This sample will be removed from the analysis as the sample is very likely not representative of the system.
+
+50% of replicate pairs must be at or below 20% RPD. Currently, 40% of low count samples area and 37.5% of high count samples are. 
+
+90% of replicate pairs must be at or below 50% RPD. Currently, 100% of low count samples are and 75% of high count samples are. 
+
+Low count samples with non-anomalous larger RPD values will be included in analyses for the time being because the data set is currently incomplete and when more replicate samples have been collected, the percent of samples meeting the thresholds may meet quality standards. A final determination will be made when all data have been collected and the project concluded in 2025. 
+
+Analysis should be re-run with the corrected dataframe to see how quality assessment improves.
+
+
+## Data Preparation
+
+Now that the QA Assessment has run, data is prepped for analysis.
+Remove all QA records and any other rejected records:
+
+```{r, results="hide"}
+# Create a new dataframe with the specified conditions
+new_df <- df %>%
+  filter(Sample_Replicate_Flag != "Y") %>%
+  filter(!(Study_Specific_Location_ID == "BLA005" & Field_Collection_Start_Date == "7/25/2023")) %>%
+  filter(!(Study_Specific_Location_ID == "BLA009" & Field_Collection_Start_Date == "10/12/2023"))
+```
+
+Define the date field so it may be recognized as a linear measure of time:
+
+```{r, results="hide"}
+##Convert date class
+new_df$Field_Collection_Start_Date
+new_df <- new_df %>% 
+  mutate(Field_Collection_Start_Date = mdy(Field_Collection_Start_Date))
+head(new_df)
+new_df$Field_Collection_Start_Date
+```
+
+Add a new field, "Season", defined by the Field_Collection_Start_Date:
+
+```{r, results="hide"}
+new_df$Month<-format(as.Date(new_df$Field_Collection_Start_Date), "%m")
+new_df$Month
+colnames(new_df)
+
+new_df <- new_df %>%
+  mutate(Season = case_when(
+      Month > 04 | Month < 10  ~ "Dry",
+      TRUE ~ "Wet"))
+     
+new_df$Season  
+new_df
+```
+
+Save the prepped dataset as an object
+
+```{r}
+save(new_df, file="J:/Git_WS/R-Code-Sample/Inputs/new_df.rda")
+write.csv(new_df, file="O:/EH_Health/Surface Water/+ PIC/Projects/Black Lake Grant 2022-25/Data/Black_Lake_Data_Prepped.csv", row.names=FALSE)
+```
+
+
+## Data Analysis
+Look at numeric distributions:
+
+```{r}
+# Plot numeric distributions of Result_Value by Result_Parameter_Name
+ggplot(new_df, aes(x = Result_Value)) +
+  geom_histogram(bins = 30) +
+  facet_wrap(~Result_Parameter_Name, scales = "free_x") +
+  theme_minimal() +
+  xlab("Result Value") +
+  ylab("Frequency") +
+  ggtitle("Distributions of Result Value by Parameter Name")
+
+
+##check normality
+# Check the normality of Result_Value by Result_Parameter_Name using QQ plots
+ggplot(new_df, aes(sample = Result_Value)) +
+  geom_qq() +
+  geom_qq_line() +
+  facet_wrap(~Result_Parameter_Name) +
+  theme_minimal() +
+  xlab("Theoretical Quantiles") +
+  ylab("Sample Quantiles") +
+  ggtitle("QQ Plots of Result Value by Parameter Name")
+```
+
+Create a boxplot using Plotly for E. coli. The plot is interactive.
+
+```{r, echo=FALSE}
+# Filter the data for E. coli
+df_ecoli <- new_df %>% 
+  filter(Result_Parameter_Name == "E.coli")
+
+# Create a boxplot of Result_Value by Study_Specific_Location_ID and by Season using plotly
+p <- plot_ly(data = df_ecoli, x = ~Study_Specific_Location_ID, y = ~Result_Value, color = ~Season, type = "box") %>%
+  layout(yaxis = list(title = "E.coli (MPN/100mL)"),
+         xaxis = list(title = "Site"),
+         boxmode = "group",
+         legend = list(title = list(text = "Season")),
+         plot_bgcolor = "white",
+         paper_bgcolor = "white")
+
+# Make the boxplot look pretty
+p <- p %>%
+  layout(font = list(family = "Arial, sans-serif", size = 12, color = "#000"),
+         margin = list(l = 40, r = 30, b = 80, t = 40, pad = 4))
+
+# Show the plot
+p
+```
+
+Create a boxplot using Plotly for Total Phosphorus
+
+```{r, echo=FALSE}
+# Filter the data for TP
+df_tp <- new_df %>% 
+  filter(Result_Parameter_Name == "Total Phosphorus")
+
+# Create a boxplot of Result_Value by Study_Specific_Location_ID and by Season using plotly
+tp <- plot_ly(data = df_tp, x = ~Study_Specific_Location_ID, y = ~Result_Value, color = ~Season, type = "box") %>%
+  layout(yaxis = list(title = "Total Phosphorus (mg/L)"),
+         xaxis = list(title = "Site"),
+         boxmode = "group",
+         legend = list(title = list(text = "Season")),
+         plot_bgcolor = "white",
+         paper_bgcolor = "white")
+
+# Make the boxplot look pretty
+tp <- tp %>%
+  layout(font = list(family = "Arial, sans-serif", size = 12, color = "#000"),
+         margin = list(l = 40, r = 30, b = 80, t = 40, pad = 4))
+
+# Show the plot
+tp
+```
+
+Create plots for each E.coli and Total Phosphorus results over time. The plots are interactive and you can click on the series to the right to hide or show them. Static pngs are also available for download.
+
+```{r, echo=FALSE}
+###E. coli
+
+# Filter the data for E. coli, then aggregate by Study_Specific_Location_ID
+df_aggregated <- new_df %>%
+  filter(Result_Parameter_Name == "E.coli") %>%
+  group_by(Study_Specific_Location_ID, Field_Collection_Start_Date) %>%
+  summarize(Result_Value = mean(Result_Value, na.rm = TRUE), .groups = 'drop')
+
+# Create a line graph of Result_Value by field_collection_start_date using the aggregated data
+l <- plot_ly(df_aggregated, x = ~Field_Collection_Start_Date, y = ~Result_Value, color = ~Study_Specific_Location_ID,
+             colors = RColorBrewer::brewer.pal(8, "Dark2")) %>%
+  add_lines() %>%
+  layout(
+    title = "E. coli Concentrations Over Time",
+    xaxis = list(title = "Date"),
+    yaxis = list(title = "E. coli (MPN/100mL)"),
+    legend = list(title = list(text = "Site")),
+    margin = list(l = 60, r = 60, t = 50, b = 50)
+  )
+
+# Show the plot
+l
+  
+###TP
+# Filter the data for TP, then aggregate by Study_Specific_Location_ID
+df_aggregated <- new_df %>%
+  filter(Result_Parameter_Name == "Total Phosphorus") %>%
+  group_by(Study_Specific_Location_ID, Field_Collection_Start_Date) %>%
+  summarize(Result_Value = mean(Result_Value, na.rm = TRUE), .groups = 'drop')
+
+# Create a line graph of Result_Value by field_collection_start_date using the aggregated data
+l1 <- plot_ly(df_aggregated, x = ~Field_Collection_Start_Date, y = ~Result_Value, color = ~Study_Specific_Location_ID,
+             colors = RColorBrewer::brewer.pal(8, "Dark2")) %>%
+  add_lines() %>%
+  layout(
+    title = "Total Phosphorus Concentrations Over Time",
+    xaxis = list(title = "Date"),
+    yaxis = list(title = "Total Phosphorus (mg/L)"),
+    legend = list(title = list(text = "Site")),
+    margin = list(l = 60, r = 60, t = 50, b = 50)
+  )
+
+# Show the plot
+l1
+```
+
+Calculate some preliminary statistics.
+
+Return the number of samples taken by site:
+
+```{r}
+#how many samples were taken?
+nrow(new_df)
+#250
+
+# Make table summary
+summary <- df %>%
+  summarise(
+    `Total number E. coli Samples Taken` = sum(Result_Parameter_Name == "E.coli"),
+    `Total number of Total Phosphorus Samples Taken` = sum(Result_Parameter_Name == "Total Phosphorus"),
+    `Number E. coli QA Samples` = sum(Result_Parameter_Name == "E.coli" & Sample_Replicate_Flag == "Y"),
+    `Number TP QA Samples` = sum(Result_Parameter_Name == "Total Phosphorus" & Sample_Replicate_Flag == "Y")
+  )
+
+summary
+```
+
+Calculate the geomean by routine site and season for E. coli:
+
+```{r}
+#Remove all Segmentation samples and filter for E. coli only
+df_filtered <- new_df %>%
+  filter(Field_Collection_Comment != "Segmentation", Result_Parameter_Name == "E.coli")
+
+# Filter for "Wet" and "Dry" seasons only
+df_season_filtered <- df_filtered %>%
+  filter(Season %in% c("Wet", "Dry"))
+
+# Define a function to calculate the geometric mean
+geomean <- function(x) exp(mean(log(x), na.rm = TRUE))
+
+# Aggregate by season and study_specific_location_id and calculate the geomean and counts
+aggregated_df <- df_season_filtered %>%
+  group_by(Study_Specific_Location_ID, Season) %>%
+  summarise(
+    Geomean = geomean(Result_Value),
+    `Total Number of Samples` = n(),
+    `% of Samples above 100` = sum(Result_Value >= 100) / n() * 100,
+    `% of Samples above 320` = sum(Result_Value >= 320) / n() * 100,
+    .groups = 'drop'
+  )
+
+aggregated_df
+```
+
+Calculate the geomean by routine site and season for Total Phosphorus:
+
+```{r}
+df_tp <- new_df %>%
+  filter(Field_Collection_Comment != "Segmentation", Result_Parameter_Name == "Total Phosphorus")
+
+# Filter for "Wet" and "Dry" seasons only
+df_season_tp <- df_tp %>%
+  filter(Season %in% c("Wet", "Dry"))
+
+# Define a function to calculate the geometric mean
+geomean <- function(x) exp(mean(log(x), na.rm = TRUE))
+
+# Aggregate by season and study_specific_location_id and calculate the geomean and counts
+aggregated_df_tp <- df_season_tp %>%
+  group_by(Study_Specific_Location_ID, Season) %>%
+  summarise(
+    Geomean = geomean(Result_Value),
+    `Total Number of Samples` = n(),
+    `% of Samples above 0.01mg/L` = sum(Result_Value >= 0.01) / n() * 100,
+    .groups = 'drop'
+  )
+
+aggregated_df_tp
+```
+
+Calculate E. coli geomean for segmented sites by season:
+
+```{r}
+#Repeat for segmented sites
+df_seg <- new_df %>%
+  filter(Field_Collection_Comment == "Segmentation", Result_Parameter_Name == "E.coli")
+
+# Filter for "Wet" and "Dry" seasons only
+df_seg_filtered <- df_seg %>%
+  filter(Season %in% c("Wet", "Dry"))
+
+# Define a function to calculate the geometric mean
+geomean <- function(x) exp(mean(log(x), na.rm = TRUE))
+
+# Aggregate by season and study_specific_location_id and calculate the geomean and counts
+aggregated_df <- df_seg_filtered %>%
+  group_by(Study_Specific_Location_ID, Season) %>%
+  summarise(
+    Geomean = geomean(Result_Value),
+    `Total Number of Samples` = n(),
+    `% of Samples above 100` = sum(Result_Value >= 100) / n() * 100,
+    `% of Samples above 320` = sum(Result_Value >= 320) / n() * 100,
+    .groups = 'drop'
+  )
+
+aggregated_df
+```
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
