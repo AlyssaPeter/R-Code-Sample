@@ -5,7 +5,7 @@ date: "`r Sys.Date()`"
 output: html_document
 ---
 
-This report includes data validation, quality assessment, and preliminary analysis for Thurston County's Water Quality Program Black Lake Pollution Identification and Correction Project. Code is included for transparency and reproducibility.
+This report includes data validation, quality assessment, and preliminary analysis for a Water Quality Program's Black Lake Pollution Identification and Correction Project. Code is included for transparency and reproducibility.
 
 If the decision to accept or reject a value is unclear, the option most protective of public health will be chosen. 
 
