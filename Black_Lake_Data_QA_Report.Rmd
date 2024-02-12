@@ -241,16 +241,8 @@ new_df$Field_Collection_Start_Date
 Add a new field, "Season", defined by the Field_Collection_Start_Date:
 
 ```{r, results="hide"}
-new_df$Month<-format(as.Date(new_df$Field_Collection_Start_Date), "%m")
-new_df$Month
-colnames(new_df)
+new_df$Season <- ifelse(format(as.Date(new_df$Field_Collection_Start_Date), "%m") %in% c("05", "06", "07", "08", "09"), "Dry", "Wet")
 
-new_df <- new_df %>%
-  mutate(Season = case_when(
-      Month > 04 | Month < 10  ~ "Dry",
-      TRUE ~ "Wet"))
-     
-new_df$Season  
 new_df
 ```
 
@@ -460,6 +452,12 @@ aggregated_df_tp <- df_season_tp %>%
   )
 
 aggregated_df_tp
+
+#add Result_parameter_name column
+aggregated_df_tp$Result_Parameter_Name <- "Total Phosphorus"
+
+#add Meets_Standards column
+aggregated_df_tp$`Meets_Standards` <- ifelse(aggregated_df_tp$Geomean < 0.01, "Yes", "No")
 ```
 
 Calculate E. coli geomean for segmented sites by season:
@@ -477,7 +475,7 @@ df_seg_filtered <- df_seg %>%
 geomean <- function(x) exp(mean(log(x), na.rm = TRUE))
 
 # Aggregate by season and study_specific_location_id and calculate the geomean and counts
-aggregated_df <- df_seg_filtered %>%
+aggregated_df_seg <- df_seg_filtered %>%
   group_by(Study_Specific_Location_ID, Season) %>%
   summarise(
     Geomean = geomean(Result_Value),
@@ -487,7 +485,25 @@ aggregated_df <- df_seg_filtered %>%
     .groups = 'drop'
   )
 
-aggregated_df
+aggregated_df_seg
+```
+
+Now merge geomean tables into a dataframe to be used in the dashboard and save it as a csv
+
+```{r}
+#Merge E.coli tables
+Black_Lake_Geomean_Table <- rbind(aggregated_df, aggregated_df_seg)
+
+#Add columns "Result_Parameter_Name" and "Meets standards"
+Black_Lake_Geomean_Table$Result_Parameter_Name <- "E.coli"
+Black_Lake_Geomean_Table$`Meets_Standards` <- ifelse(Black_Lake_Geomean_Table$Geomean < 100 | Black_Lake_Geomean_Table$`% of Samples above 320` < 10, "Yes", "No")
+
+#Merge TP table
+Black_Lake_Geomean_Table <-merge(Black_Lake_Geomean_Table, aggregated_df_tp, all.x = TRUE)
+Black_Lake_Geomean_Table <- bind_rows(Black_Lake_Geomean_Table, aggregated_df_tp)
+
+#Export to csv
+write.csv(Black_Lake_Geomean_Table, file="O:/EH_Health/Surface Water/+ PIC/Projects/Black Lake Grant 2022-25/Data/Support Data/Black_Lake_Geomean_Table.csv", row.names=FALSE)
 ```
 
 
