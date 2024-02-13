@@ -416,7 +416,7 @@ geomean <- function(x) exp(mean(log(x), na.rm = TRUE))
 
 # Aggregate by season and study_specific_location_id and calculate the geomean and counts
 aggregated_df <- df_season_filtered %>%
-  group_by(Study_Specific_Location_ID, Season) %>%
+  group_by(Study_Specific_Location_ID, Season, Latitude_Decimal_Degrees, Longitude_Decimal_Degrees) %>%
   summarise(
     Geomean = geomean(Result_Value),
     `Total Number of Samples` = n(),
@@ -443,7 +443,7 @@ geomean <- function(x) exp(mean(log(x), na.rm = TRUE))
 
 # Aggregate by season and study_specific_location_id and calculate the geomean and counts
 aggregated_df_tp <- df_season_tp %>%
-  group_by(Study_Specific_Location_ID, Season) %>%
+  group_by(Study_Specific_Location_ID, Season, Latitude_Decimal_Degrees, Longitude_Decimal_Degrees) %>%
   summarise(
     Geomean = geomean(Result_Value),
     `Total Number of Samples` = n(),
@@ -476,7 +476,7 @@ geomean <- function(x) exp(mean(log(x), na.rm = TRUE))
 
 # Aggregate by season and study_specific_location_id and calculate the geomean and counts
 aggregated_df_seg <- df_seg_filtered %>%
-  group_by(Study_Specific_Location_ID, Season) %>%
+  group_by(Study_Specific_Location_ID, Season, Latitude_Decimal_Degrees, Longitude_Decimal_Degrees) %>%
   summarise(
     Geomean = geomean(Result_Value),
     `Total Number of Samples` = n(),
