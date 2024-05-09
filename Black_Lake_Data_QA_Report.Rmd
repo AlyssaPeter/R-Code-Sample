@@ -2,18 +2,35 @@
 title: "Black Lake Analysis"
 author: "Alyssa Peter"
 date: "`r Sys.Date()`"
-output: html_document
+output:
+  html_document: default
+  pdf_document: default
 ---
 
-This report includes data validation, quality assessment, and preliminary analysis for a Water Quality Program's Black Lake Pollution Identification and Correction Project. Code is included for transparency and reproducibility.
+This report includes the automated proecesses of data verification, validation, quality assessment, and preliminary analysis for a Water Quality Program's Black Lake Pollution Identification and Correction Project. QA related to proper field and laboratory processes are conducted independently of this report. Code is included for transparency and reproducibility.
 
 If the decision to accept or reject a value is unclear, the option most protective of public health will be chosen. 
 
-```{r,warning=FALSE,message=FALSE}
+```{r,warning=FALSE,message=FALSE, results="hide"}
 library(ggplot2)
-library(dplyr)
+library(plotly)
+library(plyr)
+library(flexdashboard)
 library(tidyverse)
 library(lubridate)
+library(leaflet)
+library(htmltools)
+library(leaflet.extras)
+library(leaflet.providers)
+library(datasets)
+library(sf)
+library(crosstalk)
+library(dplyr)
+library(reactable)
+library(mapview)
+library(httr)
+library(bslib)
+library(xfun)
 
 #Plotly
 devtools::install_github("ropensci/plotly")
@@ -21,21 +38,23 @@ library(plotly)
 ```
 
 
-Load Dataframe
-
-```{r,warning=FALSE,message=FALSE}
+```{r,warning=FALSE,message=FALSE, results="hide"}
 library(RCurl)
 ```
 
 
 ```{r, results="hide"}
-df <- read.csv("https://raw.githubusercontent.com/AlyssaPeter/R-Code-Sample/main/EIM_Black_Lake_PIC_Project_Data.csv", stringsAsFactors = TRUE, fileEncoding = "ISO-8859-1")
-df
+#df <- read.csv("https://raw.githubusercontent.com/AlyssaPeter/R-Code-Sample/main/EIM_Black_Lake_PIC_Project_Data.csv", stringsAsFactors = TRUE, fileEncoding = "ISO-8859-1")
+
+df <- read.csv("O:/EH_Health/Surface Water/+ PIC/Projects/Black Lake Grant 2022-25/Data/EIM_Black_Lake_PIC_Project_Data.csv", stringsAsFactors=FALSE, fileEncoding="latin1")
+df #load dataframe
 ```
 
+---
 
-## Data Validation and QA Assessment
+## Data Verification
 
+*Basic Checks*
 Check the dataframe for null values.
 
 ```{r}
@@ -43,6 +62,31 @@ null_values <- sapply(df, function(x) sum(is.na(x)))
 null_values
 ```
 
+```{r}
+#Sometimes values are input to data table with trailing spaces. Ensure that all columns have valid values.
+
+#For example:
+unique(df$Study_Specific_Location_ID)
+
+#  [1] "BLA001"   "BLA003"   "BLA004"   "BLA005"   "BLA006"   "BLA007"   "BLA002"   "BLA008"   "BLA009"   "BLA00201" "BLA00202"
+# [12] "BLA00203" "BLA00204" "BLA00301" "BLA00501" "BLA00502" "BLA00701" "BLA00702" "BLA00703" "BLA00704" "BLA00705" "BLA00706"
+# [23] "BLA00707" "BLA00708" "BLA00709" "BLA00102" "BLA00103" "BLA00104" "BLA00101" "BLA00105" "BLA007 " 
+
+#I can see that the the column Study Specific Location ID has a repeat site ID of BLA007 with a trailing space. I will then identify the record(s) with the trailing space and fix them.
+
+df$Study_Specific_Location_ID <- trimws(df$Study_Specific_Location_ID, which = c("right"))
+unique(df$Study_Specific_Location_ID) #check again, BLA007 with trailing space has been corrected
+#  [1] "BLA001"   "BLA003"   "BLA004"   "BLA005"   "BLA006"   "BLA007"   "BLA002"   "BLA008"   "BLA009"   "BLA00201" "BLA00202"
+# [12] "BLA00203" "BLA00204" "BLA00301" "BLA00501" "BLA00502" "BLA00701" "BLA00702" "BLA00703" "BLA00704" "BLA00705" "BLA00706"
+# [23] "BLA00707" "BLA00708" "BLA00709" "BLA00102" "BLA00103" "BLA00104" "BLA00101" "BLA00105"
+
+#repeat for any other variables of concern
+unique(df$Result_Parameter_Name)
+# [1] "E.coli"           "Total Nitrogen "  "Total Phosphorus"  #TN has a trailing space that needs to be fixed
+```
+
+
+**Spatial Errors**
 Check if Latitude and Longitude are the same per each Study_Specific_Location_ID. If the return is "TRUE", then results are okay.
 
 ```{r}
@@ -55,9 +99,103 @@ location_coords_consistency <- df %>%
 location_coords_consistency
 ```
 
+FALSE values are observed for some sites. First, define correct values.
+```{r}
+# Define the mappings for Latitude and Longitude by Study_Specific_Location_ID
+latitude_mapping <- c(
+  BLA001 = 46.999244, BLA002 = 46.988902, BLA003 = 46.9891, BLA004 = 46.980352,
+  BLA005 = 46.9794, BLA006 = 47.00784, BLA007 = 46.980353, BLA008 = 47.009801,
+  BLA009 = 46.996677, BLA00201 = 46.98639, BLA00202 = 46.98759, BLA00203 = 46.99045,
+  BLA00204 = 46.993164, BLA00301 = 46.98804, BLA00501 = 46.979515, BLA00502 = 46.977944, BLA00701 = 46.98082,
+  BLA00702 = 46.97965, BLA00703 = 46.97973, BLA00704 = 46.97975, BLA00705 = 46.97927, BLA00706 = 46.97915, 
+  BLA00707 = 46.97786, BLA00708 = 46.97975, BLA00709 = 46.98072, BLA00101 = 47.00011, BLA00102 = 46.9989607,
+  BLA00103 = 47.0011206, BLA00104 = 47.0017544, BLA00105 = 47.0034, BLA00601 = 47.0088, BLA00902 = 46.9945, BLA00903 = 46.99592, BLA00904 = 46.99712, BLA00905 = 46.99808
+)
+
+longitude_mapping <- c(
+  BLA001 = -122.971982, BLA002 = -122.964812, BLA003 = -122.96155, BLA004 = -122.975222,
+  BLA005 = -122.9714, BLA006 = -122.97618, BLA007 = -122.9882787, BLA008 = -122.965046,
+  BLA009 = -122.984555, BLA00201 = -122.97224, BLA00202 = -122.96935, BLA00203 = -122.96175,
+  BLA00204 = -122.957002, BLA00301 = -122.96062, BLA00501 = -122.971299, BLA00502 = -122.968398, BLA00701 = -122.98925,
+  BLA00702 = -122.99265, BLA00703 = -122.99271, BLA00704 = -122.99252, BLA00705 = -122.99153, BLA00706 = -122.99149, 
+  BLA00707 = -122.99137, BLA00708 = -122.99429, BLA00709 = -122.98933, BLA00101 = -122.96937, BLA00102 = -122.9687191,
+  BLA00103 = -122.965938, BLA00104 = -122.9657841, BLA00105 = -122.96321, BLA00601 = -122.97644, BLA00902 = -122.98056, BLA00903 = -122.9839, BLA00904 = -122.98515, BLA00905 = -122.98692
+)
+```
+
+
+Update the lat/long to the defined values:
+```{r}
+df$Latitude_Decimal_Degrees <- ifelse(df$Study_Specific_Location_ID %in% names(latitude_mapping), latitude_mapping[df$Study_Specific_Location_ID], df$Latitude_Decimal_Degrees)
+
+df$Longitude_Decimal_Degrees <- ifelse(df$Study_Specific_Location_ID %in% names(longitude_mapping), longitude_mapping[df$Study_Specific_Location_ID], df$Longitude_Decimal_Degrees)
+
+```
+
+Create a quick map to check visually that coordinates are now correct.
+```{r}
+df$Longitude_Decimal_Degrees = as.numeric(as.character(df$Longitude_Decimal_Degrees)) #lat/long as numeric
+
+map <- df %>%
+  select(Study_Specific_Location_ID, Latitude_Decimal_Degrees, Longitude_Decimal_Degrees)
+
+map <- print(distinct(map))
+
+map <- map %>%
+  na.omit()
+map
+
+# Create a leaflet map
+map1 <- leaflet(map) %>%
+  addTiles() %>%  # Add default OpenStreetMap tiles
+  addMarkers(lng = ~Longitude_Decimal_Degrees, lat = ~Latitude_Decimal_Degrees, popup = ~paste(map$Study_Specific_Location_ID))
+map1
+```
+
+
+If coordinates are now correct, overwrite the csv:
+```{r}
+write.csv(df, file="O:/EH_Health/Surface Water/+ PIC/Projects/Black Lake Grant 2022-25/Data/EIM_Black_Lake_PIC_Project_Data.csv", row.names=FALSE)
+```
+
+
+**Result Parameter CAS Number**
+```{r}
+# find location of missing values
+print("Position of missing values ")
+which(is.na(df$Result_Parameter_CAS_Number))
+ 
+# count total missing values 
+print("Count of total missing values")
+sum(df$Result_Parameter_CAS_Number== "")
+```
+215 rows are missing Result Parameter CAS Number. This should be corrected
+
+**Result Data Qualifier**
+When Result Value = 2420, qualifier should be "G" unless "REJ"
+```{r}
+underestimates <- df %>% filter(df$Result_Value==2420)
+qualifier_table <- underestimates %>% select(Study_Specific_Location_ID, Field_Collection_Start_Date, Result_Value, Result_Data_Qualifier)
+print(qualifier_table)
+```
+Add qualifier G to any 2420 records without it.
+
+When Result Value = 1, qualifier should be "E" unless "REJ"
+```{r}
+overestimates <- df %>% filter(df$Result_Value==1)
+qualifier_tablea <- overestimates %>% select(Study_Specific_Location_ID, Field_Collection_Start_Date, Result_Value, Result_Data_Qualifier)
+print(qualifier_tablea)
+```
+All records need qualifier "E" added
+
+## Data Validation
+
 Calculate the number of QA samples taken. The result should be 0.10 or greater (at least 10% of the total).
 
 ```{r}
+#After identifying REJ records, run the following code again:
+#df_REJ <- df[df$Result_Data_Qualifier != "REJ", ]
+
 replicate_flag_counts <- df %>%
   summarise(
     total_count = n(),
@@ -67,8 +205,9 @@ replicate_flag_counts <- df %>%
 replicate_flag_counts
 ```
 
-Provide recommendation to the team to increase QA sample frequency.
+Based on results, provide a recommendation to the team to increase/decrease/maintain QA sample frequency.
 
+**Implementation Anomalies**
 Check that sample values are within expected range. If no records are returned, no values are out of expected range. Any values that are returned, please review and accept/reject accordingly.
 
 ```{r}
@@ -85,7 +224,6 @@ invalid_records <- df %>%
 # Display the records that fall out of bounds
 invalid_records
 ```
-
 
 
 **Relative Percent Difference**
@@ -157,7 +295,10 @@ For precision of bacteria field replicates:
 
 ```{r}
 # Filter for E. coli
-ecoli_data <- subset(df, Result_Parameter_Name == 'E.coli')
+ecoli_data <- subset(df, Result_Parameter_Name == 'E. coli')
+
+#Filter for records without REJ quaifier (to be done after running with entire dataset)
+#ecoli_data <- ecoli_data[ecoli_data$Result_Data_Qualifier != "REJ", ]
 
 # Filter for Sample_Replicate_Flag == "Y"
 replicate_Y_data <- ecoli_data %>%
@@ -203,7 +344,7 @@ percent_diff_results
 # • 90% of the pairs must be at or below 50% RPD
 ```
 
-The replicate sample for BLA009 on 10/12/2023 stands out as an anomaly with an RPD of 129%. This sample will be removed from the analysis as the sample is very likely not representative of the system.
+Determine which replicates are invalid. Investigate corrective actions.
 
 50% of replicate pairs must be at or below 20% RPD. Currently, 40% of low count samples area and 37.5% of high count samples are. 
 
@@ -213,18 +354,16 @@ Low count samples with non-anomalous larger RPD values will be included in analy
 
 Analysis should be re-run with the corrected dataframe to see how quality assessment improves.
 
+---
 
 ## Data Preparation
 
-Now that the QA Assessment has run, data is prepped for analysis.
-Remove all QA records and any other rejected records:
+Prep data:
+Remove all duplicate records and any other rejected records:
 
 ```{r, results="hide"}
 # Create a new dataframe with the specified conditions
-new_df <- df %>%
-  filter(Sample_Replicate_Flag != "Y") %>%
-  filter(!(Study_Specific_Location_ID == "BLA005" & Field_Collection_Start_Date == "7/25/2023")) %>%
-  filter(!(Study_Specific_Location_ID == "BLA009" & Field_Collection_Start_Date == "10/12/2023"))
+new_df <- df[!(df$Result_Data_Qualifier == "REJ" | df$Sample_Replicate_Flag == "Y"), ]
 ```
 
 Define the date field so it may be recognized as a linear measure of time:
@@ -250,11 +389,24 @@ Save the prepped dataset as an object
 
 ```{r}
 save(new_df, file="J:/Git_WS/R-Code-Sample/Inputs/new_df.rda")
+dir.create("O:/EH_Health/Surface Water/+ PIC/Projects/Black Lake Grant 2022-25/Data", recursive = TRUE, showWarnings = FALSE)
 write.csv(new_df, file="O:/EH_Health/Surface Water/+ PIC/Projects/Black Lake Grant 2022-25/Data/Black_Lake_Data_Prepped.csv", row.names=FALSE)
 ```
 
+---
 
-## Data Analysis
+## Calculate Statistical Quantities
+Statistical quantities include measures of:
+- central tendency (mean, median, etc)
+- Relative standing (percentiles)
+- Dispersion (range, variance)
+- Association (correlation)
+
+Review these quantities to determine:
+- Do the data look reasonable - do the values make sense?
+- Are there any obvious anomalies?
+- Are there any trends or patterns?
+
 Look at numeric distributions:
 
 ```{r}
@@ -280,12 +432,157 @@ ggplot(new_df, aes(sample = Result_Value)) +
   ggtitle("QQ Plots of Result Value by Parameter Name")
 ```
 
+Calculate some preliminary statistics.
+
+Return the number of samples taken by site:
+
+```{r}
+#how many samples were taken?
+nrow(new_df)
+#461
+
+# Make table summary
+summary <- new_df %>%
+  summarise(
+    `Total number E. coli Samples Taken` = sum(Result_Parameter_Name == "E. coli"),
+    `Total number of Total Phosphorus Samples Taken` = sum(Result_Parameter_Name == "Total Phosphorus"),
+    )
+
+summary
+
+samplexsite <- table(new_df$Result_Parameter_Name, new_df$Study_Specific_Location_ID)
+samplexsite
+```
+
+Calculate the geomean by routine site and season for E. coli:
+
+```{r}
+#Remove all Segmentation samples and filter for E. coli only
+df_filtered <- new_df %>%
+  filter(Field_Collection_Comment != "Segmentation", Result_Parameter_Name == "E. coli")
+
+# Filter for "Wet" and "Dry" seasons only
+df_season_filtered <- df_filtered %>%
+  filter(Season %in% c("Wet", "Dry"))
+
+# Define a function to calculate the geometric mean
+geomean <- function(x) exp(mean(log(x), na.rm = TRUE))
+
+# Aggregate by season and study_specific_location_id and calculate the geomean and counts
+aggregated_df <- df_season_filtered %>%
+  group_by(Study_Specific_Location_ID, Season, Latitude_Decimal_Degrees, Longitude_Decimal_Degrees) %>%
+  summarise(
+    Geomean = geomean(Result_Value),
+    `Total Number of Samples` = n(),
+    `% of Samples above 100` = sum(Result_Value >= 100) / n() * 100,
+    `% of Samples above 320` = sum(Result_Value >= 320) / n() * 100,
+    .groups = 'drop'
+  )
+
+aggregated_df
+
+save(aggregated_df, file="J:/Git_WS/R-Code-Sample/Inputs/e.coli_geomean_df.rda")
+```
+
+Calculate the geomean by routine site and season for Total Phosphorus:
+
+```{r}
+df_tp <- new_df %>%
+  filter(Field_Collection_Comment != "Segmentation", Result_Parameter_Name == "Total Phosphorus")
+
+# Filter for "Wet" and "Dry" seasons only
+df_season_tp <- df_tp %>%
+  filter(Season %in% c("Wet", "Dry"))
+
+# Define a function to calculate the geometric mean
+geomean <- function(x) exp(mean(log(x), na.rm = TRUE))
+
+# Aggregate by season and study_specific_location_id and calculate the geomean and counts
+aggregated_df_tp <- df_season_tp %>%
+  group_by(Study_Specific_Location_ID, Season, Latitude_Decimal_Degrees, Longitude_Decimal_Degrees) %>%
+  summarise(
+    Geomean = geomean(Result_Value),
+    `Total Number of Samples` = n(),
+    `% of Samples above 0.01mg/L` = sum(Result_Value >= 0.01) / n() * 100,
+    .groups = 'drop'
+  )
+
+aggregated_df_tp
+
+#add Result_parameter_name column
+aggregated_df_tp$Result_Parameter_Name <- "Total Phosphorus"
+
+#add Meets_Standards column
+aggregated_df_tp$`Meets_Standards` <- ifelse(aggregated_df_tp$Geomean < 0.01, "Yes", "No")
+```
+
+Calculate E. coli geomean for segmented sites by season:
+
+```{r}
+#Repeat for segmented sites
+df_seg <- new_df %>%
+  filter(Field_Collection_Comment == "Segmentation", Result_Parameter_Name == "E. coli")
+
+# Filter for "Wet" and "Dry" seasons only
+df_seg_filtered <- df_seg %>%
+  filter(Season %in% c("Wet", "Dry"))
+
+# Define a function to calculate the geometric mean
+geomean <- function(x) exp(mean(log(x), na.rm = TRUE))
+
+# Aggregate by season and study_specific_location_id and calculate the geomean and counts
+aggregated_df_seg <- df_seg_filtered %>%
+  group_by(Study_Specific_Location_ID, Season, Latitude_Decimal_Degrees, Longitude_Decimal_Degrees) %>%
+  summarise(
+    Geomean = geomean(Result_Value),
+    `Total Number of Samples` = n(),
+    `% of Samples above 100` = sum(Result_Value >= 100) / n() * 100,
+    `% of Samples above 320` = sum(Result_Value >= 320) / n() * 100,
+    .groups = 'drop'
+  )
+
+aggregated_df_seg
+```
+
+Now merge geomean tables into a dataframe to be used in the dashboard and save it as a csv
+
+```{r}
+#Merge E.coli tables
+Black_Lake_Geomean_Table <- rbind(aggregated_df, aggregated_df_seg)
+
+#Add columns "Result_Parameter_Name" and "Meets standards"
+Black_Lake_Geomean_Table$Result_Parameter_Name <- "E. coli"
+Black_Lake_Geomean_Table$`Meets_Standards` <- ifelse(Black_Lake_Geomean_Table$Geomean < 100 | Black_Lake_Geomean_Table$`% of Samples above 320` < 10, "Yes", "No")
+
+#Change data type of Black Lake Geomean 'Meets Standards'
+Black_Lake_Geomean_Table$Meets_Standards <- as.character(Black_Lake_Geomean_Table$Meets_Standards)
+
+#Merge TP table
+Black_Lake_Geomean_Table <-merge(Black_Lake_Geomean_Table, aggregated_df_tp, all.x = TRUE)
+Black_Lake_Geomean_Table <- bind_rows(Black_Lake_Geomean_Table, aggregated_df_tp)
+
+#Export to csv
+write.csv(Black_Lake_Geomean_Table, file="O:/EH_Health/Surface Water/+ PIC/Projects/Black Lake Grant 2022-25/Data/Support Data/Black_Lake_Geomean_Table.csv", row.names=FALSE)
+```
+
+---
+
+## Display the data using graphs
+
+Review graphs to determine:
+- Do the data look reasonable?
+- What is the distribution like? Is it symmetric, bimodal, etc?
+- Are there extremely high or extremely low values?
+- Are there any obvious trends?
+
 Create a boxplot using Plotly for E. coli. The plot is interactive.
 
 ```{r, echo=FALSE}
 # Filter the data for E. coli
 df_ecoli <- new_df %>% 
-  filter(Result_Parameter_Name == "E.coli")
+  filter(Result_Parameter_Name == "E. coli") %>%
+  filter(Study_Specific_Location_ID %in% c("BLA001", "BLA002", "BLA003", "BLA004", 
+                                           "BLA005", "BLA006", "BLA007", "BLA008", "BLA009"))
 
 # Create a boxplot of Result_Value by Study_Specific_Location_ID and by Season using plotly
 p <- plot_ly(data = df_ecoli, x = ~Study_Specific_Location_ID, y = ~Result_Value, color = ~Season, type = "box") %>%
@@ -303,6 +600,31 @@ p <- p %>%
 
 # Show the plot
 p
+
+save(p, file="J:/Git_WS/R-Code-Sample/Inputs/e.coli_geomean_plot.rda")
+
+install.packages("htmlwidgets")
+library(htmlwidgets)
+htmlwidgets::saveWidget(p, file = "J:/Black Lake/Plots/April2024 Assignment/boxplot.html")
+library(shiny)
+library(plotly)
+
+# Define UI for application 
+ui <- fluidPage( # Application title 
+  titlePanel("Black Lake Routine Sites"), 
+  # Show a plotly output 
+  plotlyOutput("plot") )
+
+# Define server logic 
+server <- function(input, output) { 
+  output$plot <- renderPlotly({ 
+    # Assuming 'p' is already a plotly object created outside this app 
+    p }) }
+
+# Run the application shinyApp(ui = ui, server = server)
+
+# Run the application 
+shinyApp(ui = ui, server = server)
 ```
 
 Create a boxplot using Plotly for Total Phosphorus
@@ -337,7 +659,7 @@ Create plots for each E.coli and Total Phosphorus results over time. The plots a
 
 # Filter the data for E. coli, then aggregate by Study_Specific_Location_ID
 df_aggregated <- new_df %>%
-  filter(Result_Parameter_Name == "E.coli") %>%
+  filter(Result_Parameter_Name == "E. coli") %>%
   group_by(Study_Specific_Location_ID, Field_Collection_Start_Date) %>%
   summarize(Result_Value = mean(Result_Value, na.rm = TRUE), .groups = 'drop')
 
@@ -379,134 +701,614 @@ l1 <- plot_ly(df_aggregated, x = ~Field_Collection_Start_Date, y = ~Result_Value
 l1
 ```
 
-Calculate some preliminary statistics.
-
-Return the number of samples taken by site:
-
 ```{r}
-#how many samples were taken?
-nrow(new_df)
-#250
+library("viridis")
 
-# Make table summary
-summary <- df %>%
+# Filter the data for the specific location ID and parameter name
+df_BLA001_EC <- new_df[new_df$Result_Parameter_Name == "E. coli" & new_df$Study_Specific_Location_ID == "BLA001", ]
+
+# Create the line graph
+ggplot(df_BLA001_EC, aes(x = Field_Collection_Start_Date, y = Result_Value)) +
+  geom_line(linewidth = 0.9, color = "darkcyan") +
+  labs(x = "Month", y = "E. coli (MPN/100mL)") +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title = element_text(size = 12, face = "bold")
+  ) +
+  ggtitle("Concentration of E. coli Bacteria in Streamwater at BLA001") +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y") +
+  geom_abline(intercept = 100, slope= 0, color = "darkorange3") +
+  annotate("text", x = as.Date("2024-05-01"), y = 120, label = "Water Quality Standard", color = "darkorange3", size = 3.5, hjust = 1)
+#
+#
+#
+# Filter the data for the specific location ID and parameter name
+df_BLA001_EC <- new_df[new_df$Result_Parameter_Name == "Total Phosphorus" & new_df$Study_Specific_Location_ID == "BLA001", ]
+
+# Create the line graph
+ggplot(df_BLA001_EC, aes(x = Field_Collection_Start_Date, y = Result_Value)) +
+  geom_line(linewidth = 0.9, color = "darkcyan") +
+  labs(x = "Month", y = "Total Phosphorus (mg/L)") +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title = element_text(size = 12, face = "bold")
+  ) +
+  ggtitle("Concentration of Total Phosphorus in Streamwater at BLA001") +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y") +
+  geom_abline(color="darkorange3", intercept=0.01, slope=0, stat="Water Quality Standard") +
+  annotate("text", x = as.Date("2024-05-01"), y = 0.005, label = "Water Quality Standard", color = "darkorange3", size = 3.5, hjust = 1)
+```
+```{r}
+# Filter the data for the specific location ID and parameter name
+df_BLA002_EC <- new_df[new_df$Result_Parameter_Name == "E. coli" & new_df$Study_Specific_Location_ID == "BLA002", ]
+
+# Create the line graph
+ggplot(df_BLA002_EC, aes(x = Field_Collection_Start_Date, y = Result_Value)) +
+  geom_line(linewidth = 0.9, color = "darkcyan") +
+  labs(x = "Month", y = "E. coli (MPN/100mL)") +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title = element_text(size = 12, face = "bold")
+  ) +
+  ggtitle("Concentration of E. coli Bacteria in Streamwater at BLA002") +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y") +
+  geom_abline(intercept = 100, slope= 0, color = "darkorange3") +
+  annotate("text", x = as.Date("2024-05-01"), y = 120, label = "Water Quality Standard", color = "darkorange3", size = 3.5, hjust = 1)
+#
+#
+#
+# Filter the data for the specific location ID and parameter name
+df_BLA002_EC <- new_df[new_df$Result_Parameter_Name == "Total Phosphorus" & new_df$Study_Specific_Location_ID == "BLA002", ]
+
+# Create the line graph
+ggplot(df_BLA002_EC, aes(x = Field_Collection_Start_Date, y = Result_Value)) +
+  geom_line(linewidth = 0.9, color = "darkcyan") +
+  labs(x = "Month", y = "Total Phosphorus (mg/L)") +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title = element_text(size = 12, face = "bold")
+  ) +
+  ggtitle("Concentration of Total Phosphorus in Streamwater at BLA002") +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y") +
+  geom_abline(color="darkorange3", intercept=0.01, slope=0, stat="Water Quality Standard") +
+  annotate("text", x = as.Date("2024-05-01"), y = 0.012, label = "Water Quality Standard", color = "darkorange3", size = 3.5, hjust = 1)
+```
+```{r}
+# Filter the data for the specific location ID and parameter name
+df_BLA003_EC <- new_df[new_df$Result_Parameter_Name == "E. coli" & new_df$Study_Specific_Location_ID == "BLA003", ]
+
+# Create the line graph
+ggplot(df_BLA003_EC, aes(x = Field_Collection_Start_Date, y = Result_Value)) +
+  geom_line(linewidth = 0.9, color = "darkcyan") +
+  labs(x = "Month", y = "E. coli (MPN/100mL)") +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title = element_text(size = 12, face = "bold")
+  ) +
+  ggtitle("Concentration of E. coli Bacteria in Streamwater at BLA003") +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y") +
+  geom_abline(intercept = 100, slope= 0, color = "darkorange3") +
+  annotate("text", x = as.Date("2024-05-01"), y = 140, label = "Water Quality Standard", color = "darkorange3", size = 3.5, hjust = 1)
+#
+#
+#
+# Filter the data for the specific location ID and parameter name
+df_BLA003_EC <- new_df[new_df$Result_Parameter_Name == "Total Phosphorus" & new_df$Study_Specific_Location_ID == "BLA003", ]
+
+# Create the line graph
+ggplot(df_BLA003_EC, aes(x = Field_Collection_Start_Date, y = Result_Value)) +
+  geom_line(linewidth = 0.9, color = "darkcyan") +
+  labs(x = "Month", y = "Total Phosphorus (mg/L)") +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title = element_text(size = 12, face = "bold")
+  ) +
+  ggtitle("Concentration of Total Phosphorus in Streamwater at BLA003") +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y") +
+  geom_abline(color="darkorange3", intercept=0.01, slope=0, stat="Water Quality Standard") +
+  annotate("text", x = as.Date("2024-05-01"), y = 0.012, label = "Water Quality Standard", color = "darkorange3", size = 3.5, hjust = 1)
+```
+```{r}
+# Filter the data for the specific location ID and parameter name
+df_BLA004_EC <- new_df[new_df$Result_Parameter_Name == "E. coli" & new_df$Study_Specific_Location_ID == "BLA004", ]
+
+# Create the line graph
+ggplot(df_BLA004_EC, aes(x = Field_Collection_Start_Date, y = Result_Value)) +
+  geom_line(linewidth = 0.9, color = "darkcyan") +
+  labs(x = "Month", y = "E. coli (MPN/100mL)") +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title = element_text(size = 12, face = "bold")
+  ) +
+  ggtitle("Concentration of E. coli Bacteria in Streamwater at BLA004") +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y") +
+  geom_abline(intercept = 100, slope= 0, color = "darkorange3") +
+  annotate("text", x = as.Date("2024-05-01"), y = 120, label = "Water Quality Standard", color = "darkorange3", size = 3.5, hjust = 1)
+#
+#
+#
+# Filter the data for the specific location ID and parameter name
+df_BLA004_EC <- new_df[new_df$Result_Parameter_Name == "Total Phosphorus" & new_df$Study_Specific_Location_ID == "BLA004", ]
+
+# Create the line graph
+ggplot(df_BLA004_EC, aes(x = Field_Collection_Start_Date, y = Result_Value)) +
+  geom_line(linewidth = 0.9, color = "darkcyan") +
+  labs(x = "Month", y = "Total Phosphorus (mg/L)") +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title = element_text(size = 12, face = "bold")
+  ) +
+  ggtitle("Concentration of Total Phosphorus in Streamwater at BLA004") +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y") +
+  geom_abline(color="darkorange3", intercept=0.01, slope=0, stat="Water Quality Standard") +
+  annotate("text", x = as.Date("2024-05-01"), y = 0.012, label = "Water Quality Standard", color = "darkorange3", size = 3.5, hjust = 1)
+```
+```{r}
+# Filter the data for the specific location ID and parameter name
+df_BLA005_EC <- new_df[new_df$Result_Parameter_Name == "E. coli" & new_df$Study_Specific_Location_ID == "BLA005", ]
+
+# Create the line graph
+ggplot(df_BLA005_EC, aes(x = Field_Collection_Start_Date, y = Result_Value)) +
+  geom_line(linewidth = 0.9, color = "darkcyan") +
+  labs(x = "Month", y = "E. coli (MPN/100mL)") +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title = element_text(size = 12, face = "bold")
+  ) +
+  ggtitle("Concentration of E. coli Bacteria in Streamwater at BLA005") +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y") +
+  geom_abline(intercept = 100, slope= 0, color = "darkorange3") +
+  annotate("text", x = as.Date("2024-05-01"), y = 145, label = "Water Quality Standard", color = "darkorange3", size = 3.5, hjust = 1)
+#
+#
+#
+# Filter the data for the specific location ID and parameter name
+df_BLA005_EC <- new_df[new_df$Result_Parameter_Name == "Total Phosphorus" & new_df$Study_Specific_Location_ID == "BLA005", ]
+
+# Create the line graph
+ggplot(df_BLA005_EC, aes(x = Field_Collection_Start_Date, y = Result_Value)) +
+  geom_line(linewidth = 0.9, color = "darkcyan") +
+  labs(x = "Month", y = "Total Phosphorus (mg/L)") +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title = element_text(size = 12, face = "bold")
+  ) +
+  ggtitle("Concentration of Total Phosphorus in Streamwater at BLA005") +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y") +
+  geom_hline(yintercept = 0.01, color = "darkorange3") +
+  annotate("text", x = as.Date("2024-05-01"), y = 0.011, label = "Water Quality Standard", color = "darkorange3", size = 3.5, hjust = 1)
+```
+```{r}
+# Filter the data for the specific location ID and parameter name
+df_BLA006_EC <- new_df[new_df$Result_Parameter_Name == "E. coli" & new_df$Study_Specific_Location_ID == "BLA006", ]
+
+# Create the line graph
+ggplot(df_BLA006_EC, aes(x = Field_Collection_Start_Date, y = Result_Value)) +
+  geom_line(linewidth = 0.9, color = "darkcyan") +
+  labs(x = "Month", y = "E. coli (MPN/100mL)") +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title = element_text(size = 12, face = "bold")
+  ) +
+  ggtitle("Concentration of E. coli Bacteria in Streamwater at BLA006") +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y") +
+  geom_abline(intercept = 100, slope= 0, color = "darkorange3") +
+  annotate("text", x = as.Date("2024-05-01"), y = 150, label = "Water Quality Standard", color = "darkorange3", size = 3.5, hjust = 1)
+#
+#
+#
+# Filter the data for the specific location ID and parameter name
+df_BLA006_EC <- new_df[new_df$Result_Parameter_Name == "Total Phosphorus" & new_df$Study_Specific_Location_ID == "BLA006", ]
+
+# Create the line graph
+ggplot(df_BLA006_EC, aes(x = Field_Collection_Start_Date, y = Result_Value)) +
+  geom_line(linewidth = 0.9, color = "darkcyan") +
+  labs(x = "Month", y = "Total Phosphorus (mg/L)") +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title = element_text(size = 12, face = "bold")
+  ) +
+  ggtitle("Concentration of Total Phosphorus in Streamwater at BLA006") +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y") +
+  geom_abline(color="darkorange3", intercept=0.01, slope=0, stat="Water Quality Standard") +
+  annotate("text", x = as.Date("2024-05-01"), y = 0.016, label = "Water Quality Standard", color = "darkorange3", size = 3.5, hjust = 1)
+```
+```{r}
+# Filter the data for the specific location ID and parameter name
+df_BLA007_EC <- new_df[new_df$Result_Parameter_Name == "E. coli" & new_df$Study_Specific_Location_ID == "BLA007", ]
+
+# Create the line graph
+ggplot(df_BLA007_EC, aes(x = Field_Collection_Start_Date, y = Result_Value)) +
+  geom_line(linewidth = 0.9, color = "darkcyan") +
+  labs(x = "Month", y = "E. coli (MPN/100mL)") +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title = element_text(size = 12, face = "bold")
+  ) +
+  ggtitle("Concentration of E. coli Bacteria in Streamwater at BLA007") +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y") +
+  geom_abline(intercept = 100, slope= 0, color = "darkorange3") +
+  annotate("text", x = as.Date("2024-05-01"), y = 155, label = "Water Quality Standard", color = "darkorange3", size = 3.5, hjust = 1)
+#
+#
+#
+# Filter the data for the specific location ID and parameter name
+df_BLA007_EC <- new_df[new_df$Result_Parameter_Name == "Total Phosphorus" & new_df$Study_Specific_Location_ID == "BLA007", ]
+
+# Create the line graph
+ggplot(df_BLA007_EC, aes(x = Field_Collection_Start_Date, y = Result_Value)) +
+  geom_line(linewidth = 0.9, color = "darkcyan") +
+  labs(x = "Month", y = "Total Phosphorus (mg/L)") +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title = element_text(size = 12, face = "bold")
+  ) +
+  ggtitle("Concentration of Total Phosphorus in Streamwater at BLA007") +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y") +
+  geom_abline(color="darkorange3", intercept=0.01, slope=0, stat="Water Quality Standard") +
+  annotate("text", x = as.Date("2024-05-01"), y = 0.012, label = "Water Quality Standard", color = "darkorange3", size = 3.5, hjust = 1)
+```
+```{r}
+# Filter the data for the specific location ID and parameter name
+df_BLA009_EC <- new_df[new_df$Result_Parameter_Name == "E. coli" & new_df$Study_Specific_Location_ID == "BLA009", ]
+
+# Create the line graph
+ggplot(df_BLA009_EC, aes(x = Field_Collection_Start_Date, y = Result_Value)) +
+  geom_line(linewidth = 0.9, color = "darkcyan") +
+  labs(x = "Month", y = "E. coli (MPN/100mL)") +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title = element_text(size = 12, face = "bold")
+  ) +
+  ggtitle("Concentration of E. coli Bacteria in Streamwater at BLA009") +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y") +
+  geom_abline(intercept = 100, slope= 0, color = "darkorange3") +
+  annotate("text", x = as.Date("2024-05-01"), y = 120, label = "Water Quality Standard", color = "darkorange3", size = 3.5, hjust = 1)
+#
+#
+#
+# Filter the data for the specific location ID and parameter name
+df_BLA009_EC <- new_df[new_df$Result_Parameter_Name == "Total Phosphorus" & new_df$Study_Specific_Location_ID == "BLA009", ]
+
+# Create the line graph
+ggplot(df_BLA009_EC, aes(x = Field_Collection_Start_Date, y = Result_Value)) +
+  geom_line(linewidth = 0.9, color = "darkcyan") +
+  labs(x = "Month", y = "Total Phosphorus (mg/L)") +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title = element_text(size = 12, face = "bold")
+  ) +
+  ggtitle("Concentration of Total Phosphorus in Streamwater at BLA009") +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y") +
+  geom_hline(yintercept = 0.01, color = "darkorange3") +
+  annotate("text", x = as.Date("2024-05-01"), y = 0.011, label = "Water Quality Standard", color = "darkorange3", size = 3.5, hjust = 1)
+```
+```{r}
+# Filter the data for the specific location ID and parameter name
+df_BLA008_EC <- new_df[new_df$Result_Parameter_Name == "E. coli" & new_df$Study_Specific_Location_ID == "BLA008", ]
+
+# Create the line graph
+ggplot(df_BLA008_EC, aes(x = Field_Collection_Start_Date, y = Result_Value)) +
+  geom_line(linewidth = 0.9, color = "darkcyan") +
+  labs(x = "Month", y = "E. coli (MPN/100mL)") +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title = element_text(size = 12, face = "bold")
+  ) +
+  ggtitle("Concentration of E. coli Bacteria in Streamwater at BLA008") +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y") +
+  geom_hline(yintercept = 100, color = "darkorange3") +
+  annotate("text", x = as.Date("2024-05-01"), y = 95, label = "Water Quality Standard", color = "darkorange3", size = 3.5, hjust = 1)
+#
+#
+#
+# Filter the data for the specific location ID and parameter name
+df_BLA008_EC <- new_df[new_df$Result_Parameter_Name == "Total Phosphorus" & new_df$Study_Specific_Location_ID == "BLA008", ]
+
+# Create the line graph
+ggplot(df_BLA008_EC, aes(x = Field_Collection_Start_Date, y = Result_Value)) +
+  geom_line(linewidth = 0.9, color = "darkcyan") +
+  labs(x = "Month", y = "Total Phosphorus (mg/L)") +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title = element_text(size = 12, face = "bold")
+  ) +
+  ggtitle("Concentration of Total Phosphorus in Streamwater at BLA008") +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y") +
+  geom_hline(yintercept = 0.01, color = "darkorange3") +
+  annotate("text", x = as.Date("2024-05-01"), y = 0.0105, label = "Water Quality Standard", color = "darkorange3", size = 3.5, hjust = 1) +
+  geom_hline(yintercept = 0.0195, color = "darkorange3") +
+  annotate("text", x = as.Date("2024-05-01"), y = 0.02, label = "TMDL Target", color = "darkorange3", size = 3.5, hjust = 1)
+```
+```{r}
+# Load the necessary library
+#library(dplyr)
+
+# Filter for relevant parameters
+filtered_df <- new_df %>%
+  filter(Result_Parameter_Name %in% c("E. coli", "Total Phosphorus"))
+
+# Create pairs based on Field_Collection_Start_Date and Study_Specific_Location_ID
+paired_data <- filtered_df %>% group_by(Study_Specific_Location_ID, Field_Collection_Start_Date) %>% filter(n() >= 2) %>% pivot_wider(names_from = Result_Parameter_Name, values_from = Result_Value)
+
+# Remove groups that do not have both parameters
+paired_data <- paired_data %>%
+  filter(!is.na(`E. coli`) & !is.na(`Total Phosphorus`))
+
+valid_data <- paired_data %>% group_by(Study_Specific_Location_ID) %>% filter(n() > 1) %>% summarise(correlation = ifelse(n() > 1, cor(`E. coli`, `Total Phosphorus`, use = "complete.obs"), NA), p_value = ifelse(n() > 1, cor.test(`E. coli`, `Total Phosphorus`, method = "pearson")$p.value, NA))
+
+# Test for association within each group
+#association_tests <- paired_data %>%
+ # group_by(Study_Specific_Location_ID) %>%
+  #summarize(correlation = cor(`E. coli`, `Total Phosphorus`, use = "complete.obs"),
+   #         p_value = cor.test(`E. coli`, `Total Phosphorus`, method = "pearson")$p.value)
+
+# Output the results
+#print(association_tests)
+print(valid_data)
+```
+```{r}
+# Filter dataframe for Study_Specific_Location_ID = BLA001
+BLA001_df <- new_df %>% 
+  filter(Study_Specific_Location_ID == "BLA001")
+
+# Pair records of E. coli and Total Phosphorus based on Field_Collection_Start_Date
+paired_df <- BLA001_df %>%
+  filter(Result_Parameter_Name %in% c("E. coli", "Total Phosphorus")) %>%
+  group_by(Field_Collection_Start_Date) %>%
   summarise(
-    `Total number E. coli Samples Taken` = sum(Result_Parameter_Name == "E.coli"),
-    `Total number of Total Phosphorus Samples Taken` = sum(Result_Parameter_Name == "Total Phosphorus"),
-    `Number E. coli QA Samples` = sum(Result_Parameter_Name == "E.coli" & Sample_Replicate_Flag == "Y"),
-    `Number TP QA Samples` = sum(Result_Parameter_Name == "Total Phosphorus" & Sample_Replicate_Flag == "Y")
-  )
+    E_coli = sum(Result_Value[Result_Parameter_Name == "E. coli"]),
+    Total_Phosphorus = sum(Result_Value[Result_Parameter_Name == "Total Phosphorus"])
+  ) %>%
+  filter(E_coli > 0 & Total_Phosphorus > 0)
 
-summary
+# Calculate correlation coefficient
+cor_coef <- cor(paired_df$E_coli, paired_df$Total_Phosphorus, use = "complete.obs")
+
+# Add correlation to the ggplot
+ggplot(paired_df, aes(x = E_coli, y = Total_Phosphorus)) +
+  geom_point() +
+  geom_smooth(method = "lm", color = "blue") +
+  annotate("text", x = Inf, y = Inf, label = sprintf("Correlation: %.2f", cor_coef), 
+           hjust = 1.1, vjust = 1.1, size = 5, color = "red") +
+  labs(x = "E. coli (CFU or MPN per 100 mL)", y = "Total Phosphorus (mg/L)", 
+       title = "Scatterplot of E. coli vs Total Phosphorus with Correlation (BLA001)")
 ```
-
-Calculate the geomean by routine site and season for E. coli:
-
 ```{r}
-#Remove all Segmentation samples and filter for E. coli only
-df_filtered <- new_df %>%
-  filter(Field_Collection_Comment != "Segmentation", Result_Parameter_Name == "E.coli")
+# Filter dataframe for Study_Specific_Location_ID = BLA002
+BLA002_df <- new_df %>% 
+  filter(Study_Specific_Location_ID == "BLA002")
 
-# Filter for "Wet" and "Dry" seasons only
-df_season_filtered <- df_filtered %>%
-  filter(Season %in% c("Wet", "Dry"))
-
-# Define a function to calculate the geometric mean
-geomean <- function(x) exp(mean(log(x), na.rm = TRUE))
-
-# Aggregate by season and study_specific_location_id and calculate the geomean and counts
-aggregated_df <- df_season_filtered %>%
-  group_by(Study_Specific_Location_ID, Season, Latitude_Decimal_Degrees, Longitude_Decimal_Degrees) %>%
+# Pair records of E. coli and Total Phosphorus based on Field_Collection_Start_Date
+paired_df <- BLA002_df %>%
+  filter(Result_Parameter_Name %in% c("E. coli", "Total Phosphorus")) %>%
+  group_by(Field_Collection_Start_Date) %>%
   summarise(
-    Geomean = geomean(Result_Value),
-    `Total Number of Samples` = n(),
-    `% of Samples above 100` = sum(Result_Value >= 100) / n() * 100,
-    `% of Samples above 320` = sum(Result_Value >= 320) / n() * 100,
-    .groups = 'drop'
-  )
+    E_coli = sum(Result_Value[Result_Parameter_Name == "E. coli"]),
+    Total_Phosphorus = sum(Result_Value[Result_Parameter_Name == "Total Phosphorus"])
+  ) %>%
+  filter(E_coli > 0 & Total_Phosphorus > 0)
 
-aggregated_df
+# Calculate correlation coefficient
+cor_coef <- cor(paired_df$E_coli, paired_df$Total_Phosphorus, use = "complete.obs")
+
+# Add correlation to the ggplot
+ggplot(paired_df, aes(x = E_coli, y = Total_Phosphorus)) +
+  geom_point() +
+  geom_smooth(method = "lm", color = "blue") +
+  annotate("text", x = Inf, y = Inf, label = sprintf("Correlation: %.2f", cor_coef), 
+           hjust = 1.1, vjust = 1.1, size = 5, color = "red") +
+  labs(x = "E. coli (CFU or MPN per 100 mL)", y = "Total Phosphorus (mg/L)", 
+       title = "Scatterplot of E. coli vs Total Phosphorus with Correlation (BLA002)")
 ```
-
-Calculate the geomean by routine site and season for Total Phosphorus:
-
 ```{r}
-df_tp <- new_df %>%
-  filter(Field_Collection_Comment != "Segmentation", Result_Parameter_Name == "Total Phosphorus")
+# Filter dataframe for Study_Specific_Location_ID = BLA003
+BLA003_df <- new_df %>% 
+  filter(Study_Specific_Location_ID == "BLA003")
 
-# Filter for "Wet" and "Dry" seasons only
-df_season_tp <- df_tp %>%
-  filter(Season %in% c("Wet", "Dry"))
-
-# Define a function to calculate the geometric mean
-geomean <- function(x) exp(mean(log(x), na.rm = TRUE))
-
-# Aggregate by season and study_specific_location_id and calculate the geomean and counts
-aggregated_df_tp <- df_season_tp %>%
-  group_by(Study_Specific_Location_ID, Season, Latitude_Decimal_Degrees, Longitude_Decimal_Degrees) %>%
+# Pair records of E. coli and Total Phosphorus based on Field_Collection_Start_Date
+paired_df <- BLA003_df %>%
+  filter(Result_Parameter_Name %in% c("E. coli", "Total Phosphorus")) %>%
+  group_by(Field_Collection_Start_Date) %>%
   summarise(
-    Geomean = geomean(Result_Value),
-    `Total Number of Samples` = n(),
-    `% of Samples above 0.01mg/L` = sum(Result_Value >= 0.01) / n() * 100,
-    .groups = 'drop'
-  )
+    E_coli = sum(Result_Value[Result_Parameter_Name == "E. coli"]),
+    Total_Phosphorus = sum(Result_Value[Result_Parameter_Name == "Total Phosphorus"])
+  ) %>%
+  filter(E_coli > 0 & Total_Phosphorus > 0)
 
-aggregated_df_tp
+# Calculate correlation coefficient
+cor_coef <- cor(paired_df$E_coli, paired_df$Total_Phosphorus, use = "complete.obs")
 
-#add Result_parameter_name column
-aggregated_df_tp$Result_Parameter_Name <- "Total Phosphorus"
-
-#add Meets_Standards column
-aggregated_df_tp$`Meets_Standards` <- ifelse(aggregated_df_tp$Geomean < 0.01, "Yes", "No")
+# Add correlation to the ggplot
+ggplot(paired_df, aes(x = E_coli, y = Total_Phosphorus)) +
+  geom_point() +
+  geom_smooth(method = "lm", color = "blue") +
+  annotate("text", x = Inf, y = Inf, label = sprintf("Correlation: %.2f", cor_coef), 
+           hjust = 1.1, vjust = 1.1, size = 5, color = "red") +
+  labs(x = "E. coli (CFU or MPN per 100 mL)", y = "Total Phosphorus (mg/L)", 
+       title = "Scatterplot of E. coli vs Total Phosphorus with Correlation (BLA003)")
 ```
-
-Calculate E. coli geomean for segmented sites by season:
-
 ```{r}
-#Repeat for segmented sites
-df_seg <- new_df %>%
-  filter(Field_Collection_Comment == "Segmentation", Result_Parameter_Name == "E.coli")
+# Filter dataframe for Study_Specific_Location_ID = BLA004
+BLA004_df <- new_df %>% 
+  filter(Study_Specific_Location_ID == "BLA004")
 
-# Filter for "Wet" and "Dry" seasons only
-df_seg_filtered <- df_seg %>%
-  filter(Season %in% c("Wet", "Dry"))
-
-# Define a function to calculate the geometric mean
-geomean <- function(x) exp(mean(log(x), na.rm = TRUE))
-
-# Aggregate by season and study_specific_location_id and calculate the geomean and counts
-aggregated_df_seg <- df_seg_filtered %>%
-  group_by(Study_Specific_Location_ID, Season, Latitude_Decimal_Degrees, Longitude_Decimal_Degrees) %>%
+# Pair records of E. coli and Total Phosphorus based on Field_Collection_Start_Date
+paired_df <- BLA004_df %>%
+  filter(Result_Parameter_Name %in% c("E. coli", "Total Phosphorus")) %>%
+  group_by(Field_Collection_Start_Date) %>%
   summarise(
-    Geomean = geomean(Result_Value),
-    `Total Number of Samples` = n(),
-    `% of Samples above 100` = sum(Result_Value >= 100) / n() * 100,
-    `% of Samples above 320` = sum(Result_Value >= 320) / n() * 100,
-    .groups = 'drop'
-  )
+    E_coli = sum(Result_Value[Result_Parameter_Name == "E. coli"]),
+    Total_Phosphorus = sum(Result_Value[Result_Parameter_Name == "Total Phosphorus"])
+  ) %>%
+  filter(E_coli > 0 & Total_Phosphorus > 0)
 
-aggregated_df_seg
+# Calculate correlation coefficient
+cor_coef <- cor(paired_df$E_coli, paired_df$Total_Phosphorus, use = "complete.obs")
+
+# Add correlation to the ggplot
+ggplot(paired_df, aes(x = E_coli, y = Total_Phosphorus)) +
+  geom_point() +
+  geom_smooth(method = "lm", color = "blue") +
+  annotate("text", x = Inf, y = Inf, label = sprintf("Correlation: %.2f", cor_coef), 
+           hjust = 1.1, vjust = 1.1, size = 5, color = "red") +
+  labs(x = "E. coli (CFU or MPN per 100 mL)", y = "Total Phosphorus (mg/L)", 
+       title = "Scatterplot of E. coli vs Total Phosphorus with Correlation (BLA004)")
 ```
-
-Now merge geomean tables into a dataframe to be used in the dashboard and save it as a csv
-
 ```{r}
-#Merge E.coli tables
-Black_Lake_Geomean_Table <- rbind(aggregated_df, aggregated_df_seg)
+# Filter dataframe for Study_Specific_Location_ID = BLA005
+BLA005_df <- new_df %>% 
+  filter(Study_Specific_Location_ID == "BLA005")
 
-#Add columns "Result_Parameter_Name" and "Meets standards"
-Black_Lake_Geomean_Table$Result_Parameter_Name <- "E.coli"
-Black_Lake_Geomean_Table$`Meets_Standards` <- ifelse(Black_Lake_Geomean_Table$Geomean < 100 | Black_Lake_Geomean_Table$`% of Samples above 320` < 10, "Yes", "No")
+# Pair records of E. coli and Total Phosphorus based on Field_Collection_Start_Date
+paired_df <- BLA005_df %>%
+  filter(Result_Parameter_Name %in% c("E. coli", "Total Phosphorus")) %>%
+  group_by(Field_Collection_Start_Date) %>%
+  summarise(
+    E_coli = sum(Result_Value[Result_Parameter_Name == "E. coli"]),
+    Total_Phosphorus = sum(Result_Value[Result_Parameter_Name == "Total Phosphorus"])
+  ) %>%
+  filter(E_coli > 0 & Total_Phosphorus > 0)
 
-#Merge TP table
-Black_Lake_Geomean_Table <-merge(Black_Lake_Geomean_Table, aggregated_df_tp, all.x = TRUE)
-Black_Lake_Geomean_Table <- bind_rows(Black_Lake_Geomean_Table, aggregated_df_tp)
+# Calculate correlation coefficient
+cor_coef <- cor(paired_df$E_coli, paired_df$Total_Phosphorus, use = "complete.obs")
 
-#Export to csv
-write.csv(Black_Lake_Geomean_Table, file="O:/EH_Health/Surface Water/+ PIC/Projects/Black Lake Grant 2022-25/Data/Support Data/Black_Lake_Geomean_Table.csv", row.names=FALSE)
+# Add correlation to the ggplot
+ggplot(paired_df, aes(x = E_coli, y = Total_Phosphorus)) +
+  geom_point() +
+  geom_smooth(method = "lm", color = "blue") +
+  annotate("text", x = Inf, y = Inf, label = sprintf("Correlation: %.2f", cor_coef), 
+           hjust = 1.1, vjust = 1.1, size = 5, color = "red") +
+  labs(x = "E. coli (CFU or MPN per 100 mL)", y = "Total Phosphorus (mg/L)", 
+       title = "Scatterplot of E. coli vs Total Phosphorus with Correlation (BLA005)")
+```
+```{r}
+# Filter dataframe for Study_Specific_Location_ID = BLA006
+BLA006_df <- new_df %>% 
+  filter(Study_Specific_Location_ID == "BLA006")
+
+# Pair records of E. coli and Total Phosphorus based on Field_Collection_Start_Date
+paired_df <- BLA006_df %>%
+  filter(Result_Parameter_Name %in% c("E. coli", "Total Phosphorus")) %>%
+  group_by(Field_Collection_Start_Date) %>%
+  summarise(
+    E_coli = sum(Result_Value[Result_Parameter_Name == "E. coli"]),
+    Total_Phosphorus = sum(Result_Value[Result_Parameter_Name == "Total Phosphorus"])
+  ) %>%
+  filter(E_coli > 0 & Total_Phosphorus > 0)
+
+# Calculate correlation coefficient
+cor_coef <- cor(paired_df$E_coli, paired_df$Total_Phosphorus, use = "complete.obs")
+
+# Add correlation to the ggplot
+ggplot(paired_df, aes(x = E_coli, y = Total_Phosphorus)) +
+  geom_point() +
+  geom_smooth(method = "lm", color = "blue") +
+  annotate("text", x = Inf, y = Inf, label = sprintf("Correlation: %.2f", cor_coef), 
+           hjust = 1.1, vjust = 1.1, size = 5, color = "red") +
+  labs(x = "E. coli (CFU or MPN per 100 mL)", y = "Total Phosphorus (mg/L)", 
+       title = "Scatterplot of E. coli vs Total Phosphorus with Correlation (BLA006)")
+```
+```{r}
+# Filter dataframe for Study_Specific_Location_ID = BLA007
+BLA007_df <- new_df %>% 
+  filter(Study_Specific_Location_ID == "BLA002")
+
+# Pair records of E. coli and Total Phosphorus based on Field_Collection_Start_Date
+paired_df <- BLA007_df %>%
+  filter(Result_Parameter_Name %in% c("E. coli", "Total Phosphorus")) %>%
+  group_by(Field_Collection_Start_Date) %>%
+  summarise(
+    E_coli = sum(Result_Value[Result_Parameter_Name == "E. coli"]),
+    Total_Phosphorus = sum(Result_Value[Result_Parameter_Name == "Total Phosphorus"])
+  ) %>%
+  filter(E_coli > 0 & Total_Phosphorus > 0)
+
+# Calculate correlation coefficient
+cor_coef <- cor(paired_df$E_coli, paired_df$Total_Phosphorus, use = "complete.obs")
+
+# Add correlation to the ggplot
+ggplot(paired_df, aes(x = E_coli, y = Total_Phosphorus)) +
+  geom_point() +
+  geom_smooth(method = "lm", color = "blue") +
+  annotate("text", x = Inf, y = Inf, label = sprintf("Correlation: %.2f", cor_coef), 
+           hjust = 1.1, vjust = 1.1, size = 5, color = "red") +
+  labs(x = "E. coli (CFU or MPN per 100 mL)", y = "Total Phosphorus (mg/L)", 
+       title = "Scatterplot of E. coli vs Total Phosphorus with Correlation (BLA007)")
+```
+```{r}
+# Filter dataframe for Study_Specific_Location_ID = BLA009
+BLA009_df <- new_df %>% 
+  filter(Study_Specific_Location_ID == "BLA009")
+
+# Pair records of E. coli and Total Phosphorus based on Field_Collection_Start_Date
+paired_df <- BLA009_df %>%
+  filter(Result_Parameter_Name %in% c("E. coli", "Total Phosphorus")) %>%
+  group_by(Field_Collection_Start_Date) %>%
+  summarise(
+    E_coli = sum(Result_Value[Result_Parameter_Name == "E. coli"]),
+    Total_Phosphorus = sum(Result_Value[Result_Parameter_Name == "Total Phosphorus"])
+  ) %>%
+  filter(E_coli > 0 & Total_Phosphorus > 0)
+
+# Calculate correlation coefficient
+cor_coef <- cor(paired_df$E_coli, paired_df$Total_Phosphorus, use = "complete.obs")
+
+# Add correlation to the ggplot
+ggplot(paired_df, aes(x = E_coli, y = Total_Phosphorus)) +
+  geom_point() +
+  geom_smooth(method = "lm", color = "blue") +
+  annotate("text", x = Inf, y = Inf, label = sprintf("Correlation: %.2f", cor_coef), 
+           hjust = 1.1, vjust = 1.1, size = 5, color = "red") +
+  labs(x = "E. coli (CFU or MPN per 100 mL)", y = "Total Phosphorus (mg/L)", 
+       title = "Scatterplot of E. coli vs Total Phosphorus with Correlation (BLA009)")
 ```
 
+---
 
-```{r setup, include=FALSE}
+From the review of this report, we should gain a sense of data quality. Our prepped dataset should now meet our acceptance criteria. 
+
+Further assessment still needs to be done:
+Data should be of appropriate quality to meet both our performance and acceptance criteria. 
+Performance criteria needs to be established and appropriate amendments and analyses should follow before decision-making.
+
+
+```{r setup}
 knitr::opts_chunk$set(echo = TRUE)
 ```
